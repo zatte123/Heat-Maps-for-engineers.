@@ -1,124 +1,92 @@
 import datetime as dt
-import json
+import sys
+from pathlib import Path
 
-import pytest
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import engineer_heatmap as E  # noqa: E402
 
-from heatmap import postcodes
-from heatmap.build import render_html
-from heatmap.config import load_config
-from heatmap.demo import demo_geocoder, demo_tables, fake_fetch
-from heatmap.geocode import Geocoder
-from heatmap.loader import load_dataset
-from heatmap.mapping import guess_board, guess_engineers, resolve
-from heatmap.source import MemorySource
+BASE = {"Holiday": False, "Sick": False, "BHoliday": False, "Unpaid": False, "ProjectMgr": "Ali"}
+DAY = dt.datetime(2026, 10, 6)
 
 
-def test_normalise_and_extract():
-    assert postcodes.normalise("n31ab") == "N3 1AB"
-    assert postcodes.normalise(" ec1a 1bb ") == "EC1A 1BB"
-    assert postcodes.normalise("N3") == "N3"
-    assert postcodes.normalise("not a postcode") is None
-    assert postcodes.extract("12 High Rd, Finchley, London N3 2AB") == "N3 2AB"
-    assert postcodes.extract("no postcode here") is None
+def test_postcodes():
+    assert E.normalise_postcode("n31ab") == "N3 1AB"
+    assert E.normalise_postcode("N3") == "N3"
+    assert E.normalise_postcode("rubbish") is None
+    assert E.find_postcode(None, "Flat 6, 22 Royal Engineers Way,\nLondon,\nNW7 1SX,\nUK") == "NW7 1SX"
 
 
-def test_office_prefix():
-    assert postcodes.is_office("N3 1AB", "N3")
-    assert not postcodes.is_office("N4 1AB", "N3")
-    assert not postcodes.is_office(None, "N3")
+def test_name_matching():
+    people = [{"name": "Jason P A Faulkner"}, {"name": "Adam Joyce"}, {"name": "Adam Smith"}, {"name": "Lee Welch"}]
+    idx = E.NameIndex(people)
+    assert idx.get("Jason Faulkner")["name"] == "Jason P A Faulkner"
+    assert idx.get("jason")["name"] == "Jason P A Faulkner"
+    assert idx.get("Adam J")["name"] == "Adam Joyce"
+    assert idx.get("Adam") is None  # two Adams - don't guess
+    assert idx.get("Lee  WELCH")["name"] == "Lee Welch"
+    assert idx.get("Nobody") is None
 
 
-def test_guess_columns():
-    eng = guess_engineers(["StaffID", "FirstName", "Surname", "Address1", "PostCode", "Active"])
-    assert eng["name"] == ["FirstName", "Surname"]
-    assert eng["home_postcode"] == "PostCode"
-    assert eng["active"] == "Active"
-    board = guess_board(["ID", "DateCreated", "WorkDate", "Engineer1", "Engineer2", "SitePostcode", "JobNo"])
-    assert board["date"] == "WorkDate"
-    assert board["engineer"] == ["Engineer1", "Engineer2"]
-    assert board["job_ref"] == "JobNo"
+def test_access_time_and_numbers():
+    assert E._as_time(dt.datetime(1899, 12, 30, 8, 30)) == "08:30"
+    assert E._as_time(dt.datetime(1899, 12, 30, 0, 0)) is None
+    assert E._key(12.0) == E._key(12) == E._key("12") == "12"
 
 
-def test_config_override_beats_guess(tmp_path):
-    cfg_file = tmp_path / "c.json"
-    cfg_file.write_text(json.dumps({"board": {"table": "tblBoard", "site_address": None, "job_ref": "BoardID"}}))
-    cfg = load_config(cfg_file)
-    _, board, _ = resolve(MemorySource(demo_tables(dt.date(2026, 10, 5))), cfg)
-    assert board["job_ref"] == "BoardID"
+def _run(tables, tmp_path, homes_csv=None):
+    E.FITTER_HOMES_CSV = tmp_path / "fitter_homes.csv"
+    if homes_csv:
+        E.FITTER_HOMES_CSV.write_text(homes_csv)
+    return E.load_dataset(E.MemoryDB(tables), dt.date(2026, 10, 5), dt.date(2026, 10, 9),
+                          E.Geocoder(None, E.demo_fetch), "test")
 
 
-def test_bad_column_in_config_is_reported():
-    cfg = load_config("does-not-exist.json")
-    cfg["board"]["date"] = "Nope"
-    with pytest.raises(SystemExit, match="Nope"):
-        resolve(MemorySource(demo_tables(dt.date(2026, 10, 5))), cfg)
+def test_board_with_homes_csv(tmp_path):
+    board = [
+        {**BASE, "IDNo": 1, "FitRef": 5, "FitterName": "Jason Faulkner", "JobDate": DAY, "JobPostCode": "SE1 2AB",
+         "JobNo": 101, "StartTime": dt.datetime(1899, 12, 30, 9, 0)},
+        {**BASE, "IDNo": 2, "FitRef": 7, "FitterName": "Lee Welch", "JobDate": DAY, "Holiday": True},
+        {**BASE, "IDNo": 3, "FitRef": 0, "FitterName": None, "JobDate": DAY, "JobPostCode": "w2 1ab", "JobNo": 102},
+        {**BASE, "IDNo": 4, "FitRef": 5, "FitterName": "Jason Faulkner", "JobDate": dt.datetime(2026, 12, 1),
+         "JobPostCode": "SE1 2AB"},
+    ]
+    csv = "FitRef,FitterName,HomePostcode\n,Jason P A Faulkner,NW7 1SX\n,Lee Welch,N12 8QR\n,Callum Kenny,W2 6HL\n"
+    data = _run({"Board": board}, tmp_path, csv)
+
+    eng = {e["name"]: e for e in data["engineers"]}
+    assert eng["Jason Faulkner"]["postcode"] == "NW7 1SX" and eng["Jason Faulkner"]["lat"] is not None
+    assert eng["Callum Kenny"]["postcode"] == "W2 6HL"  # in the CSV but not on the board yet: still a candidate
+    by_id = {b["id"].split("-")[0]: b for b in data["bookings"]}
+    assert by_id["b1"]["startTime"] == "09:00" and by_id["b1"]["engineerId"] == "5"
+    assert by_id["b2"]["off"] == "Holiday" and by_id["b2"]["postcode"] is None
+    assert by_id["b3"]["engineerId"] is None and by_id["b3"]["postcode"] == "W2 1AB"
+    assert "b4" not in by_id  # outside the window
 
 
-def _tables():
-    d = dt.datetime
-    return {
-        "Engineers": [
-            {"ID": 1, "Name": "Ann", "HomeAddress": "1 Road, London N12 8AB", "Postcode": None, "Active": True},
-            {"ID": 2, "Name": "Bob", "HomeAddress": "", "Postcode": "e17 4ab", "Active": True},
-            {"ID": 3, "Name": "Old", "HomeAddress": "", "Postcode": "E4 1AB", "Active": False},
-            {"ID": 4, "Name": "Nohome", "HomeAddress": "", "Postcode": "", "Active": True},
-        ],
-        "Board": [
-            {"JobDate": d(2026, 10, 2), "EndDate": d(2026, 10, 6), "Engineer": "Ann", "SitePostcode": "SE1 2AB", "JobNo": "J1"},
-            {"JobDate": d(2026, 10, 5), "EndDate": None, "Engineer": "2", "SitePostcode": "W2 1AB", "JobNo": "J2"},
-            {"JobDate": d(2026, 10, 6), "EndDate": None, "Engineer": None, "SitePostcode": "EC1A 1AB", "JobNo": "J3"},
-            {"JobDate": d(2026, 10, 6), "EndDate": None, "Engineer": "Zed", "SitePostcode": "XX", "JobNo": "J4"},
-            {"JobDate": d(2026, 11, 30), "EndDate": None, "Engineer": "Ann", "SitePostcode": "SE1 2AB", "JobNo": "late"},
-        ],
+def test_finds_fitters_table_by_names(tmp_path):
+    board = [{**BASE, "IDNo": 1, "FitRef": 5, "FitterName": "Adam Joyce", "JobDate": DAY, "JobPostCode": "SE1 2AB"}]
+    tables = {
+        "Board": board,
+        "Customers": [{"ID": 5, "Name": "Big Client", "PostCode": "EC1A 1BB"}],  # same id, wrong table
+        "Staff": [{"StaffID": 99, "FullName": "Adam Joyce", "HomeAddress": "1 Musket Close, East Barnet, EN4 8QR"}],
     }
+    data = _run(tables, tmp_path)
+    assert data["engineers"][0]["postcode"] == "EN4 8QR"
 
 
-def test_load_dataset_end_to_end():
-    cfg = load_config("does-not-exist.json")
-    data = load_dataset(MemorySource(_tables()), cfg, dt.date(2026, 10, 5), dt.date(2026, 10, 8), demo_geocoder())
-
-    names = {e["name"]: e for e in data["engineers"]}
-    assert "Old" not in names  # inactive
-    assert names["Ann"]["postcode"] == "N12 8AB"  # pulled out of the address
-    assert names["Bob"]["postcode"] == "E17 4AB"
-    assert names["Ann"]["lat"] is not None
-    assert names["Zed"]["id"] == "?Zed"  # unmatched board value stays visible as busy
-
-    by_ref = {}
-    for b in data["bookings"]:
-        by_ref.setdefault(b["ref"], []).append(b)
-    # Multi-day J1 (Fri-Tue) clipped to the window and skipping the weekend: Mon, Tue.
-    assert [b["date"] for b in by_ref["J1"]] == ["2026-10-05", "2026-10-06"]
-    assert by_ref["J2"][0]["engineerId"] == "2"  # matched by id
-    assert by_ref["J3"][0]["engineerId"] is None  # unassigned
-    assert by_ref["J4"][0]["lat"] is None
-    assert "late" not in by_ref
-    assert any("Zed" in w for w in data["warnings"])
-    assert any("Nohome" in w for w in data["warnings"])
-    assert data["office"]["postcode"] == "N3"
+def test_template_csv_when_no_homes(tmp_path):
+    board = [{**BASE, "IDNo": 1, "FitRef": 5, "FitterName": "Adam Joyce", "JobDate": DAY, "JobPostCode": "SE1 2AB"}]
+    data = _run({"Board": board}, tmp_path)
+    assert "Adam Joyce" in E.FITTER_HOMES_CSV.read_text()
+    assert any("fitter_homes.csv" in w for w in data["warnings"])
 
 
-def test_geocoder_caches(tmp_path):
-    calls = []
-
-    def fetch(method, url, body):
-        calls.append(url)
-        return fake_fetch(method, url, body)
-
-    cache = tmp_path / "cache.json"
-    g = Geocoder(cache, fetch)
-    out = g.lookup_many(["n3 1aa", "N3 1AA", "SE1 1AA", "ZZ9 9ZZ"])
-    g.save()
-    assert set(out) == {"N3 1AA", "SE1 1AA"}
-    calls.clear()
-    out2 = Geocoder(cache, fetch).lookup_many(["N3 1AA", "SE1 1AA"])
-    assert out2 == out and calls == []
-
-
-def test_render_html_embeds_data_safely():
-    cfg = load_config("does-not-exist.json")
-    data = load_dataset(MemorySource(_tables()), cfg, dt.date(2026, 10, 5), dt.date(2026, 10, 8), demo_geocoder())
+def test_demo_renders(tmp_path):
+    E.FITTER_HOMES_CSV = tmp_path / "none.csv"
+    data = E.load_dataset(E.MemoryDB(E.demo_tables(dt.date(2026, 10, 5))), dt.date(2026, 10, 2),
+                          dt.date(2026, 10, 20), E.Geocoder(None, E.demo_fetch), "demo")
     data["engineers"][0]["name"] = "</script><b>x"
-    html = render_html(data)
+    html = E.render_html(data)
     assert "__DATA__" not in html and "/*__APP__*/" not in html
     assert "</script><b>x" not in html
+    assert sum(e["lat"] is not None for e in data["engineers"]) == len(data["engineers"])

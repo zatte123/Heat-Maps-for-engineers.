@@ -1,7 +1,15 @@
 // Run with: node --test tests/planner.test.js
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const P = require("../heatmap/web/planner.js");
+const fs = require("node:fs");
+const path = require("node:path");
+
+// The planner lives inside engineer_heatmap.py as PLANNER_JS = r'''...'''
+const py = fs.readFileSync(path.join(__dirname, "..", "engineer_heatmap.py"), "utf8");
+const src = py.match(/PLANNER_JS = r'''([\s\S]*?)'''/)[1];
+const mod = { exports: {} };
+new Function("module", src)(mod);
+const P = mod.exports;
 
 const settings = {
   min_stop_min: 30, target_office: "06:00", target_site: "07:50",
@@ -87,4 +95,17 @@ test("long day is reported as overtime against contract hours", () => {
   assert.equal(opt.kind, "office_morning");
   assert.ok(opt.overtimeMin > 0);
   assert.ok(opt.homeLate > 0);
+});
+
+test("board StartTime replaces the default on-site target", () => {
+  const job = { id: "j", date: "2026-10-06", postcode: "E1 1AA", needsMaterials: false, startTime: "09:00", ...at(10) };
+  const [opt] = P.planOptions(job, at(12, "e"), { ...ctx, prevSite: null });
+  assert.equal(opt.arriveSite, P.toMin("09:00"));
+});
+
+test("an engineer who is off (holiday) is not ranked", () => {
+  const job = { id: "j", date: "2026-10-06", postcode: "E1 1AA", needsMaterials: false, ...at(10) };
+  const bookings = [{ id: "h", date: "2026-10-06", postcode: null, off: "Holiday", engineerId: "a" }];
+  const r = P.rankCandidates(job, [at(1, "a"), at(2, "b")], bookings, ctx);
+  assert.deepEqual(r.ranked.map((c) => c.engineer.id), ["b"]);
 });

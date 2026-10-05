@@ -1,7 +1,6 @@
-# Generated maps and lookups contain engineers' home postcodes - keep them off GitHub.
+# Engineers' home postcodes - this repo is public, keep them off GitHub.
+fitter_homes.csv
 output/
 postcode_cache.json
-schema_report.txt
-heatmap_config.json
 __pycache__/
 .pytest_cache/
