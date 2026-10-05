@@ -21,13 +21,13 @@ import csv
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import random
 import re
 import sys
 import traceback
 import urllib.error
-import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -97,15 +97,16 @@ DEFAULT_NEEDS_MATERIALS = False
 # The map shows today and everything after it. Past days are never shown; the
 # previous working day is still read so "collect materials the day before" works.
 DAYS_AHEAD = None  # None = every upcoming booking; or a number of days
-# Map background. OpenStreetMap's own servers block pages opened from a file
-# (403 "Access blocked"), so CARTO's basemaps are used instead. They need a free
-# key from https://carto.com/basemaps/apikey/ (free for commercial use up to
-# 1M tiles a month - far more than one planner uses). Without a key the map
-# still works but the tiles show an "API key required" watermark.
-CARTO_API_KEY = ""
-TILE_URL_LIGHT = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-TILE_URL_DARK = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+# Map background: a still picture of the area, saved next to the map in
+# output/tiles. The pieces are downloaded once from OpenStreetMap (free, no key),
+# kept for TILE_CACHE_DAYS, and only new areas are fetched after that. The map
+# then opens straight from the file - no server, no account.
+TILE_SOURCE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+TILE_USER_AGENT = "EngineerHeatmap/1.0 (internal job-planning map; python urllib)"
+TILE_ZOOMS = range(8, 13)  # 8 = whole South East ... 12 = main roads and towns
+TILE_MAX = 400             # cap per area, so a far-away job can't trigger a big download
+TILE_CACHE_DAYS = 30
 
 OUTPUT_DIR = HERE / "output"
 GEOCODE_CACHE = HERE / "postcode_cache.json"
@@ -617,17 +618,79 @@ def load_dataset(db, today: dt.date, geocoder: Geocoder, label: str, days_ahead:
         "lastDate": max([b["date"] for b in bookings] + [today.isoformat()]),
         "office": {"prefix": DEFAULT_OFFICE_PREFIX, "postcode": office_pc, **locs[office_pc]},
         "settings": planning_settings(),
-        "tiles": {"light": _with_key(TILE_URL_LIGHT), "dark": _with_key(TILE_URL_DARK), "attribution": TILE_ATTRIBUTION},
         "engineers": sorted(fitters.values(), key=lambda f: f["name"].lower()),
         "bookings": bookings,
         "warnings": warnings,
     }
 
 
-def _with_key(url: str) -> str:
-    if not CARTO_API_KEY or "cartocdn.com" not in url:
-        return url
-    return f"{url}{'&' if '?' in url else '?'}key={urllib.parse.quote(CARTO_API_KEY)}"
+def _tile_xy(lat: float, lon: float, z: int) -> tuple[int, int]:
+    n = 2 ** z
+    lat = max(min(lat, 85.0), -85.0)
+    x = int((lon + 180.0) / 360.0 * n)
+    y = int((1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n)
+    return min(max(x, 0), n - 1), min(max(y, 0), n - 1)
+
+
+def _http_tile(url: str) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": TILE_USER_AGENT})
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read()
+
+
+def prepare_tiles(points, folder: Path, fetch=_http_tile) -> dict | None:
+    """Make sure the map pictures covering ``points`` exist in ``folder``.
+
+    Returns what the page needs to show them, or None if there are none.
+    """
+    points = [(lat, lon) for lat, lon in points if lat is not None]
+    if not points:
+        return None
+    pad = 0.2  # a margin so the edges of the area aren't blank
+    south, north = min(p[0] for p in points) - pad, max(p[0] for p in points) + pad
+    west, east = min(p[1] for p in points) - pad, max(p[1] for p in points) + pad
+
+    plan, max_zoom = [], None
+    for z in TILE_ZOOMS:
+        x0, y0 = _tile_xy(north, west, z)
+        x1, y1 = _tile_xy(south, east, z)
+        tiles = [(z, x, y) for x in range(x0, x1 + 1) for y in range(y0, y1 + 1)]
+        if plan and len(plan) + len(tiles) > TILE_MAX:
+            break
+        plan += tiles
+        max_zoom = z
+
+    fresh = dt.datetime.now().timestamp() - TILE_CACHE_DAYS * 86400
+    todo = [t for t in plan if not (folder / f"{t[0]}/{t[1]}/{t[2]}.png").exists()
+            or (folder / f"{t[0]}/{t[1]}/{t[2]}.png").stat().st_mtime < fresh]
+    if todo:
+        print(f"Downloading {len(todo)} map pieces (one-off; reused for {TILE_CACHE_DAYS} days) ...")
+    failures = 0
+    for i, (z, x, y) in enumerate(todo, 1):
+        path = folder / f"{z}/{x}/{y}.png"
+        try:
+            data = fetch(TILE_SOURCE.format(z=z, x=x, y=y))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            failures = 0
+        except Exception as exc:  # keep any older copy; give up if the server is unreachable
+            failures += 1
+            if failures >= 5:
+                print(f"  ! couldn't download the map background ({exc}); the map will show without it")
+                break
+        if i % 50 == 0:
+            print(f"  {i}/{len(todo)}")
+
+    have = [t for t in plan if (folder / f"{t[0]}/{t[1]}/{t[2]}.png").exists()]
+    if not have:
+        return None
+    return {
+        "url": f"{folder.name}/{{z}}/{{x}}/{{y}}.png",
+        "minZoom": TILE_ZOOMS[0],
+        "maxNativeZoom": max_zoom,
+        "bounds": [[south, west], [north, east]],
+        "attribution": TILE_ATTRIBUTION,
+    }
 
 
 def render_html(dataset: dict) -> str:
@@ -820,6 +883,7 @@ PAGE_CSS = r''':root {
   --accent-wash: rgba(42, 120, 214, 0.10);
 }
 @media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9); }
   :root:not([data-theme="light"]) {
     color-scheme: dark;
     --page: #0d0d0d;
@@ -836,6 +900,7 @@ PAGE_CSS = r''':root {
     --accent-wash: rgba(57, 135, 229, 0.18);
   }
 }
+:root[data-theme="dark"] .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9); }
 :root[data-theme="dark"] {
   color-scheme: dark;
   --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --hair: #2c2c2a;
@@ -1250,12 +1315,16 @@ APP_JS = r'''(function () {
   }
 
   // ---------- map ----------
-  const map = L.map("map", { zoomControl: true, preferCanvas: true });
-  const theme = document.documentElement.dataset.theme;
-  const dark = theme ? theme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
-  L.tileLayer(dark ? DATA.tiles.dark : DATA.tiles.light, {
-    maxZoom: 19, subdomains: "abcd", attribution: DATA.tiles.attribution,
-  }).addTo(map);
+  // The background is a still picture saved in the "tiles" folder next to this file.
+  const T = DATA.tiles;
+  const map = L.map("map", { zoomControl: true, preferCanvas: true, minZoom: T ? T.minZoom : 3, maxZoom: T ? T.maxNativeZoom + 3 : 18 });
+  if (T) {
+    L.tileLayer(T.url, {
+      minZoom: T.minZoom, maxNativeZoom: T.maxNativeZoom, maxZoom: T.maxNativeZoom + 3,
+      bounds: T.bounds, attribution: T.attribution,
+      errorTileUrl: "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==",
+    }).addTo(map);
+  }
 
   const hasHeat = typeof L.heatLayer === "function";
   const homePts = engineers.filter((e) => e.lat != null).map((e) => [e.lat, e.lon]);
@@ -1643,6 +1712,9 @@ def main(argv=None) -> None:
     data = load_dataset(db, today, geocoder, label, args.days_ahead)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    pts = [(data["office"]["lat"], data["office"]["lon"])] + [(e["lat"], e["lon"]) for e in data["engineers"]] + [
+        (b["lat"], b["lon"]) for b in data["bookings"] if b["date"] >= data["today"]]
+    data["tiles"] = prepare_tiles(pts, OUTPUT_DIR / "tiles")
     out = OUTPUT_DIR / ("demo_heatmap.html" if args.demo else "engineer_heatmap.html")
     out.write_text(render_html(data), encoding="utf-8")
     placed = sum(f["lat"] is not None for f in data["engineers"])
@@ -1652,8 +1724,7 @@ def main(argv=None) -> None:
     for w in data["warnings"]:
         print("  !", w)
     print(f"Map: {out}")
-    if not CARTO_API_KEY:
-        print("  (tip: set CARTO_API_KEY at the top of the script to remove the watermark on the map tiles)")
+    print("  (keep the 'tiles' folder next to it - that's the map background)")
     if not args.no_open:
         webbrowser.open(out.as_uri())
 

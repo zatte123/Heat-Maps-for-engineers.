@@ -95,3 +95,37 @@ def test_demo_renders(tmp_path):
     assert "__DATA__" not in html and "/*__APP__*/" not in html
     assert "</script><b>x" not in html
     assert sum(e["lat"] is not None for e in data["engineers"]) == len(data["engineers"])
+
+
+def test_still_map_tiles_are_cached(tmp_path):
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        return b"png"
+
+    pts = [(51.60, -0.19), (51.50, -0.10)]
+    t = E.prepare_tiles(pts, tmp_path / "tiles", fetch)
+    assert t["url"] == "tiles/{z}/{x}/{y}.png" and t["minZoom"] == 8
+    assert 0 < len(calls) <= E.TILE_MAX
+    assert all(u.startswith("https://tile.openstreetmap.org/") for u in calls)
+    first = len(calls)
+    E.prepare_tiles(pts, tmp_path / "tiles", fetch)
+    assert len(calls) == first  # second run reuses what's on disk
+
+
+def test_still_map_gives_up_quickly_when_offline(tmp_path):
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        raise OSError("no network")
+
+    assert E.prepare_tiles([(51.6, -0.19), (51.0, 0.5)], tmp_path / "tiles", fetch) is None
+    assert len(calls) == 5
+
+
+def test_far_away_job_lowers_detail_instead_of_huge_download(tmp_path):
+    calls = []
+    t = E.prepare_tiles([(51.6, -0.19), (53.48, -2.24)], tmp_path / "t", lambda u: calls.append(u) or b"x")
+    assert len(calls) <= E.TILE_MAX and t["maxNativeZoom"] < 12
