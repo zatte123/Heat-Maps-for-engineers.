@@ -13,17 +13,17 @@ def test_postcodes():
     assert E.normalise_postcode("n31ab") == "N3 1AB"
     assert E.normalise_postcode("N3") == "N3"
     assert E.normalise_postcode("rubbish") is None
-    assert E.find_postcode(None, "Flat 6, 22 Royal Engineers Way,\nLondon,\nNW7 1SX,\nUK") == "NW7 1SX"
+    assert E.find_postcode(None, "Flat 6, 22 Example Way,\nLondon,\nN12 8AB,\nUK") == "N12 8AB"
 
 
 def test_name_matching():
-    people = [{"name": "Jason P A Faulkner"}, {"name": "Adam Joyce"}, {"name": "Adam Smith"}, {"name": "Lee Welch"}]
+    people = [{"name": "Tom R J Baker"}, {"name": "Sam Green"}, {"name": "Sam Brown"}, {"name": "Dan Price"}]
     idx = E.NameIndex(people)
-    assert idx.get("Jason Faulkner")["name"] == "Jason P A Faulkner"
-    assert idx.get("jason")["name"] == "Jason P A Faulkner"
-    assert idx.get("Adam J")["name"] == "Adam Joyce"
-    assert idx.get("Adam") is None  # two Adams - don't guess
-    assert idx.get("Lee  WELCH")["name"] == "Lee Welch"
+    assert idx.get("Tom Baker")["name"] == "Tom R J Baker"
+    assert idx.get("tom")["name"] == "Tom R J Baker"
+    assert idx.get("Sam G")["name"] == "Sam Green"
+    assert idx.get("Sam") is None  # two Sams - don't guess
+    assert idx.get("Dan  PRICE")["name"] == "Dan Price"
     assert idx.get("Nobody") is None
 
 
@@ -37,54 +37,59 @@ def _run(tables, tmp_path, homes_csv=None):
     E.FITTER_HOMES_CSV = tmp_path / "fitter_homes.csv"
     if homes_csv:
         E.FITTER_HOMES_CSV.write_text(homes_csv)
-    return E.load_dataset(E.MemoryDB(tables), dt.date(2026, 10, 5), dt.date(2026, 10, 9),
-                          E.Geocoder(None, E.demo_fetch), "test")
+    return E.load_dataset(E.MemoryDB(tables), dt.date(2026, 10, 5), E.Geocoder(None, E.demo_fetch), "test")
 
 
 def test_board_with_homes_csv(tmp_path):
     board = [
-        {**BASE, "IDNo": 1, "FitRef": 5, "FitterName": "Jason Faulkner", "JobDate": DAY, "JobPostCode": "SE1 2AB",
+        {**BASE, "IDNo": 1, "FitRef": 5, "FitterName": "Tom Baker", "JobDate": DAY, "JobPostCode": "SE1 2AB",
          "JobNo": 101, "StartTime": dt.datetime(1899, 12, 30, 9, 0)},
-        {**BASE, "IDNo": 2, "FitRef": 7, "FitterName": "Lee Welch", "JobDate": DAY, "Holiday": True},
+        {**BASE, "IDNo": 2, "FitRef": 7, "FitterName": "Dan Price", "JobDate": DAY, "Holiday": True},
         {**BASE, "IDNo": 3, "FitRef": 0, "FitterName": None, "JobDate": DAY, "JobPostCode": "w2 1ab", "JobNo": 102},
-        {**BASE, "IDNo": 4, "FitRef": 5, "FitterName": "Jason Faulkner", "JobDate": dt.datetime(2026, 12, 1),
+        {**BASE, "IDNo": 4, "FitRef": 5, "FitterName": "Tom Baker", "JobDate": dt.datetime(2026, 10, 1),
+         "JobPostCode": "SE1 2AB"},
+        {**BASE, "IDNo": 5, "FitRef": 5, "FitterName": "Tom Baker", "JobDate": dt.datetime(2026, 10, 2),
+         "JobPostCode": "SE1 2AB"},
+        {**BASE, "IDNo": 6, "FitRef": 5, "FitterName": "Tom Baker", "JobDate": dt.datetime(2027, 3, 1),
          "JobPostCode": "SE1 2AB"},
     ]
-    csv = "FitRef,FitterName,HomePostcode\n,Jason P A Faulkner,NW7 1SX\n,Lee Welch,N12 8QR\n,Callum Kenny,W2 6HL\n"
+    csv = "FitRef,FitterName,HomePostcode\n,Tom R J Baker,N12 8AB\n,Dan Price,E4 7AB\n,Rob Hill,SE9 4XY\n"
     data = _run({"Board": board}, tmp_path, csv)
 
     eng = {e["name"]: e for e in data["engineers"]}
-    assert eng["Jason Faulkner"]["postcode"] == "NW7 1SX" and eng["Jason Faulkner"]["lat"] is not None
-    assert eng["Callum Kenny"]["postcode"] == "W2 6HL"  # in the CSV but not on the board yet: still a candidate
+    assert eng["Tom Baker"]["postcode"] == "N12 8AB" and eng["Tom Baker"]["lat"] is not None
+    assert eng["Rob Hill"]["postcode"] == "SE9 4XY"  # in the CSV but not on the board yet: still a candidate
     by_id = {b["id"].split("-")[0]: b for b in data["bookings"]}
     assert by_id["b1"]["startTime"] == "09:00" and by_id["b1"]["engineerId"] == "5"
     assert by_id["b2"]["off"] == "Holiday" and by_id["b2"]["postcode"] is None
     assert by_id["b3"]["engineerId"] is None and by_id["b3"]["postcode"] == "W2 1AB"
-    assert "b4" not in by_id  # outside the window
+    assert "b4" not in by_id  # the past is left out ...
+    assert by_id["b5"]["date"] == "2026-10-02"  # ... except the previous working day, for day-before pickups
+    assert by_id["b6"]["date"] == "2027-03-01"  # no limit on how far ahead
 
 
 def test_finds_fitters_table_by_names(tmp_path):
-    board = [{**BASE, "IDNo": 1, "FitRef": 5, "FitterName": "Adam Joyce", "JobDate": DAY, "JobPostCode": "SE1 2AB"}]
+    board = [{**BASE, "IDNo": 1, "FitRef": 5, "FitterName": "Sam Green", "JobDate": DAY, "JobPostCode": "SE1 2AB"}]
     tables = {
         "Board": board,
         "Customers": [{"ID": 5, "Name": "Big Client", "PostCode": "EC1A 1BB"}],  # same id, wrong table
-        "Staff": [{"StaffID": 99, "FullName": "Adam Joyce", "HomeAddress": "1 Musket Close, East Barnet, EN4 8QR"}],
+        "Staff": [{"StaffID": 99, "FullName": "Sam Green", "HomeAddress": "1 Example Close, London, HA8 7AB"}],
     }
     data = _run(tables, tmp_path)
-    assert data["engineers"][0]["postcode"] == "EN4 8QR"
+    assert data["engineers"][0]["postcode"] == "HA8 7AB"
 
 
 def test_template_csv_when_no_homes(tmp_path):
-    board = [{**BASE, "IDNo": 1, "FitRef": 5, "FitterName": "Adam Joyce", "JobDate": DAY, "JobPostCode": "SE1 2AB"}]
+    board = [{**BASE, "IDNo": 1, "FitRef": 5, "FitterName": "Sam Green", "JobDate": DAY, "JobPostCode": "SE1 2AB"}]
     data = _run({"Board": board}, tmp_path)
-    assert "Adam Joyce" in E.FITTER_HOMES_CSV.read_text()
+    assert "Sam Green" in E.FITTER_HOMES_CSV.read_text()
     assert any("fitter_homes.csv" in w for w in data["warnings"])
 
 
 def test_demo_renders(tmp_path):
     E.FITTER_HOMES_CSV = tmp_path / "none.csv"
-    data = E.load_dataset(E.MemoryDB(E.demo_tables(dt.date(2026, 10, 5))), dt.date(2026, 10, 2),
-                          dt.date(2026, 10, 20), E.Geocoder(None, E.demo_fetch), "demo")
+    data = E.load_dataset(E.MemoryDB(E.demo_tables(dt.date(2026, 10, 5))), dt.date(2026, 10, 5),
+                          E.Geocoder(None, E.demo_fetch), "demo")
     data["engineers"][0]["name"] = "</script><b>x"
     html = E.render_html(data)
     assert "__DATA__" not in html and "/*__APP__*/" not in html

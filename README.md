@@ -3,7 +3,11 @@
 One script, `engineer_heatmap.py`. It reads the board in `CMS593.accdb`, works out where
 each fitter lives, and opens an interactive map in your browser:
 
-- **Heat map** of where fitters live (blue) and where the day's jobs are (orange), with the N3 office marked as HQ.
+- **Today and upcoming only.** Days before today are never shown, and there's no limit on how far ahead.
+  Only the last 14 days of the board are read (`ACTIVE_LOOKBACK_DAYS`), so the old rows going back
+  to 2012 are filtered out inside Access and never loaded.
+- **Heat map of where the work is**: every upcoming job, so busy areas stand out. Fitters' homes
+  are labelled pins (initials), and the N3 office is marked HQ.
 - **The day's board**: each booked fitter's home linked to their site. Fitters who are off
   (Holiday, Sick, BHoliday, Unpaid) are listed as unavailable. You can filter by **ProjectMgr**.
 - **Best fitter for a job**: click an unassigned job (green) or a booked one to check it.

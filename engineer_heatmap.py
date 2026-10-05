@@ -69,8 +69,10 @@ FITTERS_POSTCODE_COLUMN = None  # home postcode; if None the postcode is pulled 
 # table is found, a template with every current fitter is written for you to fill in.
 FITTER_HOMES_CSV = HERE / "fitter_homes.csv"
 
-# Fitters who haven't been on the board for this long aren't offered as candidates.
-ACTIVE_LOOKBACK_DAYS = 60
+# How far back the board is read. Older rows (back to 2012) are never fetched -
+# the date filter runs inside Access. Fitters on the board in this period, plus
+# everyone in fitter_homes.csv, are offered as candidates.
+ACTIVE_LOOKBACK_DAYS = 14
 
 DEFAULT_OFFICE_PREFIX = "N3"  # any postcode starting with this counts as "at office"
 OFFICE_POSTCODE = None        # exact office postcode, e.g. "N3 1AB"; None = centre of N3
@@ -91,8 +93,15 @@ AVG_SPEED_KMH = 30.0
 # No materials column on the board, so this is the starting value (tick per job on the map).
 DEFAULT_NEEDS_MATERIALS = False
 
-DAYS_BACK = 3     # so Monday can see Friday's sites
-DAYS_AHEAD = 14
+# The map shows today and everything after it. Past days are never shown; the
+# previous working day is still read so "collect materials the day before" works.
+DAYS_AHEAD = None  # None = every upcoming booking; or a number of days
+# Map background. OpenStreetMap's own servers block pages opened from a file
+# (403 "Access blocked"), so CARTO's free basemaps are used instead.
+TILE_URL_LIGHT = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+TILE_URL_DARK = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+
 OUTPUT_DIR = HERE / "output"
 GEOCODE_CACHE = HERE / "postcode_cache.json"
 
@@ -356,7 +365,7 @@ def _tokens(name) -> list[str]:
 
 
 class NameIndex:
-    """Match names loosely: 'Jason P A Faulkner' = 'Jason Faulkner' = 'Jason F' = 'Jason'
+    """Match names loosely: 'Jane A Smith' = 'Jane Smith' = 'Jane S' = 'Jane'
     (the last two only when no other fitter shares that first name)."""
 
     def __init__(self, people):
@@ -463,8 +472,17 @@ def write_homes_template(path: Path, fitters: dict) -> None:
             w.writerow([f["ref"], f["name"], f.get("postcode") or ""])
 
 
-def load_dataset(db, start: dt.date, end: dt.date, geocoder: Geocoder, label: str) -> dict:
-    """Bookings for start <= date < end, every active fitter with a home location."""
+def previous_working_day(day: dt.date) -> dt.date:
+    day -= dt.timedelta(days=1)
+    while day.weekday() >= 5:
+        day -= dt.timedelta(days=1)
+    return day
+
+
+def load_dataset(db, today: dt.date, geocoder: Geocoder, label: str, days_ahead: int | None = None) -> dict:
+    """Bookings from today onwards (plus the previous working day, for planning only)."""
+    start = previous_working_day(today)
+    end = today + dt.timedelta(days=days_ahead + 1) if days_ahead is not None else dt.date(2100, 1, 1)
     warnings: list[str] = []
     C = BOARD_COLUMNS
 
@@ -478,8 +496,8 @@ def load_dataset(db, start: dt.date, end: dt.date, geocoder: Geocoder, label: st
             raise SystemExit(f"Board table '{board}' has no {C[k]} column.")
     print(f"  board = {board}")
 
-    lookback = start - dt.timedelta(days=ACTIVE_LOOKBACK_DAYS)
-    print(f"Reading board rows {lookback} to {end - dt.timedelta(days=1)} ...")
+    lookback = today - dt.timedelta(days=ACTIVE_LOOKBACK_DAYS)
+    print(f"Reading board rows from {lookback} onwards ...")
     rows = db.rows(board, [c for c in {*wanted.values(), *absence} if c], wanted["date"],
                    dt.datetime.combine(lookback, dt.time()), dt.datetime.combine(end, dt.time()))
     print(f"  {len(rows)} rows")
@@ -590,10 +608,11 @@ def load_dataset(db, start: dt.date, end: dt.date, geocoder: Geocoder, label: st
     return {
         "generatedAt": dt.datetime.now().isoformat(timespec="minutes"),
         "source": label,
-        "windowStart": start.isoformat(),
-        "windowEnd": (end - dt.timedelta(days=1)).isoformat(),
+        "today": today.isoformat(),
+        "lastDate": max([b["date"] for b in bookings] + [today.isoformat()]),
         "office": {"prefix": DEFAULT_OFFICE_PREFIX, "postcode": office_pc, **locs[office_pc]},
         "settings": planning_settings(),
+        "tiles": {"light": TILE_URL_LIGHT, "dark": TILE_URL_DARK, "attribution": TILE_ATTRIBUTION},
         "engineers": sorted(fitters.values(), key=lambda f: f["name"].lower()),
         "bookings": bookings,
         "warnings": warnings,
@@ -719,9 +738,8 @@ PAGE_HTML = r'''<!doctype html>
         <button type="button" id="nextDay" aria-label="Next day">&#8250;</button>
       </div>
       <div class="layers" role="group" aria-label="Map layers">
-        <label><input type="checkbox" id="lyHomesHeat" checked><span class="sw sw-home"></span>Homes heat</label>
-        <label><input type="checkbox" id="lySitesHeat" checked><span class="sw sw-site"></span>Job sites heat</label>
-        <label><input type="checkbox" id="lyHomes" checked><span class="dot dot-home"></span>Homes</label>
+        <label><input type="checkbox" id="lySitesHeat" checked><span class="sw sw-site"></span>Jobs heat (all upcoming)</label>
+        <label><input type="checkbox" id="lyHomes" checked><span class="dot dot-home"></span>Engineer homes</label>
         <label><input type="checkbox" id="lyLinks" checked><span class="line"></span>Home &rarr; site</label>
       </div>
     </section>
@@ -806,7 +824,6 @@ PAGE_CSS = r''':root {
     --good-ink: #0ca30c;
     --accent-wash: rgba(57, 135, 229, 0.18);
   }
-  :root:not([data-theme="light"]) .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9); }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -814,7 +831,6 @@ PAGE_CSS = r''':root {
   --border: rgba(255, 255, 255, 0.10); --home: #3987e5; --site: #d95926; --open: #199e70;
   --office: #ffffff; --good-ink: #0ca30c; --accent-wash: rgba(57, 135, 229, 0.18);
 }
-:root[data-theme="dark"] .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9); }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
@@ -845,7 +861,7 @@ button.link, button.back { border: 0; background: none; color: var(--home); padd
 :focus-visible { outline: 2px solid var(--home); outline-offset: 2px; }
 
 .daybar { display: grid; grid-template-columns: auto 1fr auto; gap: 6px; }
-.layers { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 10px; font-size: 13px; }
+.layers { display: grid; grid-template-columns: 1fr; gap: 6px 12px; margin-top: 10px; font-size: 13px; }
 .layers label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .sw { width: 18px; height: 10px; border-radius: 3px; }
 .sw-home { background: linear-gradient(90deg, #cde2fb, var(--home)); }
@@ -907,6 +923,7 @@ button.link, button.back { border: 0; background: none; color: var(--home); padd
   border: 2px solid var(--surface); box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
 .pin-office { background: var(--office); color: var(--surface); border-radius: 4px; }
 .pin-cand { background: var(--home); }
+.pin-home { width: 26px; height: 26px; background: var(--home); font-size: 10px; letter-spacing: 0.02em; }
 .leaflet-tooltip { font: 12px/1.3 system-ui, sans-serif; }
 
 @media (max-width: 760px) {
@@ -1162,7 +1179,11 @@ APP_JS = r'''(function () {
   const engineers = DATA.engineers;
   const engById = new Map(engineers.map((e) => [e.id, e]));
   const settings = Object.assign({}, DATA.settings, store.get("heatmap.settings", {}));
-  let adhoc = store.get("heatmap.adhoc", []).filter((j) => j.date >= DATA.windowStart);
+  // Only today and later is shown - whichever is later of build day and the day the page is opened.
+  const now = new Date();
+  const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const today = localToday > DATA.today ? localToday : DATA.today;
+  let adhoc = store.get("heatmap.adhoc", []).filter((j) => j.date >= today);
   const materials = new Map(); // job key -> needs materials (PM override for this session)
 
   const allBookings = () => DATA.bookings.concat(adhoc);
@@ -1170,7 +1191,7 @@ APP_JS = r'''(function () {
   const ctx = () => ({ office, settings, index });
 
   // ---------- header ----------
-  $("meta").textContent = `${engineers.filter((e) => e.lat != null).length} engineers mapped · board ${fmtDate(DATA.windowStart)} – ${fmtDate(DATA.windowEnd)} · generated ${DATA.generatedAt.replace("T", " ")}`;
+  $("meta").textContent = `${engineers.filter((e) => e.lat != null).length} engineers mapped · board from ${fmtDate(today)} · generated ${DATA.generatedAt.replace("T", " ")}`;
   if (DATA.warnings.length) {
     const box = $("warnings");
     box.hidden = false;
@@ -1186,23 +1207,19 @@ APP_JS = r'''(function () {
     const m = Math.round(min);
     return m >= 60 ? `+${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m` : `+${m} min`;
   }
-  function localToday() {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }
 
   // ---------- dates ----------
+  // Today, every weekday of the next fortnight, and any later day with something booked.
   function workingDates() {
-    const out = new Set(allBookings().map((b) => b.date));
-    const d = new Date(DATA.windowStart + "T12:00:00Z");
-    const end = new Date(DATA.windowEnd + "T12:00:00Z");
-    for (; d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
-      if (d.getUTCDay() % 6 !== 0) out.add(d.toISOString().slice(0, 10));
+    const out = new Set(allBookings().map((b) => b.date).filter((d) => d >= today));
+    const d = new Date(today + "T12:00:00Z");
+    for (let i = 0; i < 14; i++, d.setUTCDate(d.getUTCDate() + 1)) {
+      if (d.getUTCDay() % 6 !== 0 || i === 0) out.add(d.toISOString().slice(0, 10));
     }
     return [...out].sort();
   }
   let dates = workingDates();
-  let day = dates.find((d) => d >= localToday()) || dates[dates.length - 1];
+  let day = dates[0];
 
   function fillPMs() {
     const pms = [...new Set(DATA.bookings.map((b) => b.pm).filter(Boolean))].sort();
@@ -1223,16 +1240,14 @@ APP_JS = r'''(function () {
 
   // ---------- map ----------
   const map = L.map("map", { zoomControl: true, preferCanvas: true });
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 18, attribution: "&copy; OpenStreetMap contributors",
+  const theme = document.documentElement.dataset.theme;
+  const dark = theme ? theme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+  L.tileLayer(dark ? DATA.tiles.dark : DATA.tiles.light, {
+    maxZoom: 19, subdomains: "abcd", attribution: DATA.tiles.attribution,
   }).addTo(map);
 
   const hasHeat = typeof L.heatLayer === "function";
-  const homePts = engineers.filter((e) => e.lat != null).map((e) => [e.lat, e.lon, 1]);
-  const homesHeat = hasHeat ? L.heatLayer(homePts, {
-    radius: 28, blur: 22, minOpacity: 0.2, maxZoom: 10, max: 2.5,
-    gradient: { 0.2: "#cde2fb", 0.45: "#86b6ef", 0.7: "#2a78d6", 1: "#104281" },
-  }) : L.layerGroup();
+  const homePts = engineers.filter((e) => e.lat != null).map((e) => [e.lat, e.lon]);
   const sitesHeat = hasHeat ? L.heatLayer([], {
     radius: 28, blur: 22, minOpacity: 0.2, maxZoom: 10, max: 2.5,
     gradient: { 0.2: "#fbd9c9", 0.45: "#f39a73", 0.7: "#eb6834", 1: "#a8401a" },
@@ -1242,11 +1257,13 @@ APP_JS = r'''(function () {
   const sitesLayer = L.layerGroup().addTo(map);
   const selLayer = L.layerGroup().addTo(map);
 
+  const initials = (name) => String(name).split(/\s+/).filter(Boolean).map((w) => w[0]).filter((c, i, a) => i === 0 || i === a.length - 1).join("").toUpperCase();
   for (const e of engineers) {
     if (e.lat == null) continue;
-    L.circleMarker([e.lat, e.lon], { radius: 4, weight: 1, color: cssVar("--surface"), fillColor: cssVar("--home"), fillOpacity: 0.9 })
-      .bindTooltip(`${esc(e.name)}<br>${esc(e.postcode)}${e.approx ? " (approx.)" : ""}`)
-      .addTo(homesLayer);
+    L.marker([e.lat, e.lon], {
+      icon: L.divIcon({ className: "", html: `<div class="pin pin-home">${esc(initials(e.name))}</div>`, iconSize: [26, 26] }),
+      zIndexOffset: 500,
+    }).bindTooltip(`${esc(e.name)} – home<br>${esc(e.postcode)}${e.approx ? " (approx.)" : ""}`).addTo(homesLayer);
   }
   L.marker([office.lat, office.lon], {
     icon: L.divIcon({ className: "", html: '<div class="pin pin-office" style="width:22px;height:22px">HQ</div>', iconSize: [22, 22] }),
@@ -1258,7 +1275,7 @@ APP_JS = r'''(function () {
   let selectedCand = 0;
   let showAll = false;
 
-  const toggles = [["lyHomesHeat", homesHeat], ["lySitesHeat", sitesHeat], ["lyHomes", homesLayer], ["lyLinks", linksLayer]];
+  const toggles = [["lySitesHeat", sitesHeat], ["lyHomes", homesLayer], ["lyLinks", linksLayer]];
   for (const [id, layer] of toggles) {
     const box = $(id);
     // The day's home->site lines would bury the selected job's routes, so they hide while one is open.
@@ -1269,7 +1286,7 @@ APP_JS = r'''(function () {
   }
   const syncLayers = () => toggles.forEach(([id]) => $(id).dispatchEvent(new Event("sync")));
 
-  const fitPts = homePts.map((p) => [p[0], p[1]]).concat([[office.lat, office.lon]]);
+  const fitPts = homePts.concat([[office.lat, office.lon]]);
   if (fitPts.length > 1) map.fitBounds(fitPts, { padding: [30, 30] });
   else map.setView([office.lat, office.lon], 10);
 
@@ -1313,7 +1330,12 @@ APP_JS = r'''(function () {
     const jobs = jobsForDay(day);
     const placed = jobs.filter((j) => j.lat != null);
 
-    if (hasHeat) sitesHeat.setLatLngs(placed.map((j) => [j.lat, j.lon, Math.max(1, j.crew.length)]));
+    if (hasHeat) {
+      // Heat covers every upcoming job, so it shows where the work is overall; pins show the chosen day.
+      const upcoming = allBookings().filter((b) => b.date >= today && !b.off && b.lat != null);
+      sitesHeat.setOptions({ max: Math.max(2.5, Math.sqrt(upcoming.length)) }); // scale so busy areas stand out, not everything
+      sitesHeat.setLatLngs(upcoming.map((b) => [b.lat, b.lon, 1]));
+    }
     sitesLayer.clearLayers();
     linksLayer.clearLayers();
     for (const j of placed) {
@@ -1587,8 +1609,8 @@ def main(argv=None) -> None:
     ap.add_argument("--db", default=DEFAULT_ACCDB_PATH, help="path to the .accdb")
     ap.add_argument("--list", action="store_true", help="list tables and columns, then stop")
     ap.add_argument("--demo", action="store_true", help="use made-up data instead of the database")
-    ap.add_argument("--start", help="centre date YYYY-MM-DD (default today)")
-    ap.add_argument("--days-ahead", type=int, default=DAYS_AHEAD)
+    ap.add_argument("--start", help="treat this date YYYY-MM-DD as today")
+    ap.add_argument("--days-ahead", type=int, default=DAYS_AHEAD, help="limit how far ahead (default: everything)")
     ap.add_argument("--no-open", action="store_true", help="don't open the browser")
     args = ap.parse_args(argv)
 
@@ -1606,17 +1628,16 @@ def main(argv=None) -> None:
                 print(f"{table}: (can't read: {exc})")
         return
 
-    centre = dt.date.fromisoformat(args.start) if args.start else dt.date.today()
-    start, end = centre - dt.timedelta(days=DAYS_BACK), centre + dt.timedelta(days=args.days_ahead + 1)
-    data = load_dataset(db, start, end, geocoder, label)
+    today = dt.date.fromisoformat(args.start) if args.start else dt.date.today()
+    data = load_dataset(db, today, geocoder, label, args.days_ahead)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUTPUT_DIR / ("demo_heatmap.html" if args.demo else "engineer_heatmap.html")
     out.write_text(render_html(data), encoding="utf-8")
     placed = sum(f["lat"] is not None for f in data["engineers"])
-    jobs = [b for b in data["bookings"] if not b["off"]]
-    print(f"\n{placed}/{len(data['engineers'])} fitters placed, {len(jobs)} bookings "
-          f"({sum(not b['engineerId'] for b in jobs)} unassigned), {data['windowStart']} to {data['windowEnd']}")
+    jobs = [b for b in data["bookings"] if not b["off"] and b["date"] >= data["today"]]
+    print(f"\n{placed}/{len(data['engineers'])} fitters placed, {len(jobs)} bookings from today "
+          f"({sum(not b['engineerId'] for b in jobs)} unassigned), up to {data['lastDate']}")
     for w in data["warnings"]:
         print("  !", w)
     print(f"Map: {out}")
