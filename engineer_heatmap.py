@@ -27,6 +27,7 @@ import re
 import sys
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -97,7 +98,11 @@ DEFAULT_NEEDS_MATERIALS = False
 # previous working day is still read so "collect materials the day before" works.
 DAYS_AHEAD = None  # None = every upcoming booking; or a number of days
 # Map background. OpenStreetMap's own servers block pages opened from a file
-# (403 "Access blocked"), so CARTO's free basemaps are used instead.
+# (403 "Access blocked"), so CARTO's basemaps are used instead. They need a free
+# key from https://carto.com/basemaps/apikey/ (free for commercial use up to
+# 1M tiles a month - far more than one planner uses). Without a key the map
+# still works but the tiles show an "API key required" watermark.
+CARTO_API_KEY = ""
 TILE_URL_LIGHT = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
 TILE_URL_DARK = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
 TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
@@ -612,11 +617,17 @@ def load_dataset(db, today: dt.date, geocoder: Geocoder, label: str, days_ahead:
         "lastDate": max([b["date"] for b in bookings] + [today.isoformat()]),
         "office": {"prefix": DEFAULT_OFFICE_PREFIX, "postcode": office_pc, **locs[office_pc]},
         "settings": planning_settings(),
-        "tiles": {"light": TILE_URL_LIGHT, "dark": TILE_URL_DARK, "attribution": TILE_ATTRIBUTION},
+        "tiles": {"light": _with_key(TILE_URL_LIGHT), "dark": _with_key(TILE_URL_DARK), "attribution": TILE_ATTRIBUTION},
         "engineers": sorted(fitters.values(), key=lambda f: f["name"].lower()),
         "bookings": bookings,
         "warnings": warnings,
     }
+
+
+def _with_key(url: str) -> str:
+    if not CARTO_API_KEY or "cartocdn.com" not in url:
+        return url
+    return f"{url}{'&' if '?' in url else '?'}key={urllib.parse.quote(CARTO_API_KEY)}"
 
 
 def render_html(dataset: dict) -> str:
@@ -1641,6 +1652,8 @@ def main(argv=None) -> None:
     for w in data["warnings"]:
         print("  !", w)
     print(f"Map: {out}")
+    if not CARTO_API_KEY:
+        print("  (tip: set CARTO_API_KEY at the top of the script to remove the watermark on the map tiles)")
     if not args.no_open:
         webbrowser.open(out.as_uri())
 

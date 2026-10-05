@@ -63,6 +63,10 @@ the contract days are 10 h and 9 h. Score = driving minutes + 3 × minutes late 
 minutes late home. Drive time is estimated as straight-line distance × 1.3 ÷ 30 km/h. You
 can change that in the page's settings panel.
 
+Map background: CARTO basemaps. Get a free key at https://carto.com/basemaps/apikey/ and paste it into
+`CARTO_API_KEY` at the top of the script. It's free for commercial use up to 1M tile requests a month.
+Without a key the map still works but shows an "API key required" watermark.
+
 Postcodes are looked up on postcodes.io, which is free and needs no key. Results are cached
 in `postcode_cache.json`.
 
