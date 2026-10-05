@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engineer Heat Map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<style>
+/*__CSS__*/
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <header class="head">
+      <h1>Engineer heat map</h1>
+      <p class="meta" id="meta"></p>
+      <details class="warn" id="warnings" hidden><summary></summary><ul></ul></details>
+    </header>
+
+    <section class="block">
+      <div class="daybar">
+        <button type="button" id="prevDay" aria-label="Previous day">&#8249;</button>
+        <select id="daySelect" aria-label="Date"></select>
+        <button type="button" id="nextDay" aria-label="Next day">&#8250;</button>
+      </div>
+      <div class="layers" role="group" aria-label="Map layers">
+        <label><input type="checkbox" id="lyHomesHeat" checked><span class="sw sw-home"></span>Homes heat</label>
+        <label><input type="checkbox" id="lySitesHeat" checked><span class="sw sw-site"></span>Job sites heat</label>
+        <label><input type="checkbox" id="lyHomes" checked><span class="dot dot-home"></span>Homes</label>
+        <label><input type="checkbox" id="lyLinks" checked><span class="line"></span>Home &rarr; site</label>
+      </div>
+    </section>
+
+    <section class="block" id="listView">
+      <div class="row-between"><h2 id="listTitle">Jobs</h2><span class="muted" id="listCount"></span></div>
+      <ul class="jobs" id="jobList"></ul>
+
+      <details class="plan" id="planBox">
+        <summary>Plan a job that isn't on the board</summary>
+        <form id="planForm" autocomplete="off">
+          <label>Site postcode<input name="postcode" required placeholder="e.g. EC1A 1BB"></label>
+          <label>Date<input name="date" type="date" required></label>
+          <label>Job ref<input name="ref" placeholder="optional"></label>
+          <label class="check"><input type="checkbox" name="needsMaterials"> Needs materials from the office</label>
+          <button type="submit">Find best engineers</button>
+          <p class="muted" id="planMsg" role="status"></p>
+        </form>
+      </details>
+
+      <details class="plan">
+        <summary>Travel &amp; timing settings</summary>
+        <form id="settingsForm" class="grid2"></form>
+      </details>
+    </section>
+
+    <section class="block" id="jobView" hidden>
+      <button type="button" class="back" id="backBtn">&larr; All jobs</button>
+      <div id="jobHead"></div>
+      <label class="check"><input type="checkbox" id="jobMaterials"> Needs materials from the office</label>
+      <ol class="cands" id="candList"></ol>
+      <button type="button" class="link" id="moreBtn" hidden></button>
+      <details class="plan" id="busyBox"><summary></summary><ul class="busy"></ul></details>
+    </section>
+  </aside>
+  <main id="map" aria-label="Map"></main>
+</div>
+<script type="application/json" id="data">__DATA__</script>
+<script>
+/*__PLANNER__*/
+</script>
+<script>
+/*__APP__*/
+</script>
+</body>
+</html>

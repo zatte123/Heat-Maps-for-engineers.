@@ -1,0 +1,140 @@
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --hair: #e1e0d9;
+  --border: rgba(11, 11, 11, 0.10);
+  --home: #2a78d6;      /* series 1: where engineers live */
+  --site: #eb6834;      /* series 2: booked sites */
+  --open: #1baf7a;      /* series 3: unassigned jobs */
+  --office: #0b0b0b;
+  --good: #0ca30c;
+  --good-ink: #006300;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --accent-wash: rgba(42, 120, 214, 0.10);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --hair: #2c2c2a;
+    --border: rgba(255, 255, 255, 0.10);
+    --home: #3987e5;
+    --site: #d95926;
+    --open: #199e70;
+    --office: #ffffff;
+    --good-ink: #0ca30c;
+    --accent-wash: rgba(57, 135, 229, 0.18);
+  }
+  :root:not([data-theme="light"]) .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9); }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --hair: #2c2c2a;
+  --border: rgba(255, 255, 255, 0.10); --home: #3987e5; --site: #d95926; --open: #199e70;
+  --office: #ffffff; --good-ink: #0ca30c; --accent-wash: rgba(57, 135, 229, 0.18);
+}
+:root[data-theme="dark"] .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9); }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--page);
+  color: var(--ink);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.app { display: grid; grid-template-columns: 380px 1fr; height: 100vh; }
+.side { background: var(--surface); border-right: 1px solid var(--border); overflow-y: auto; }
+#map { height: 100%; min-height: 320px; background: var(--page); }
+
+.head { padding: 16px 16px 8px; }
+h1 { font-size: 18px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 0; }
+.meta, .muted { color: var(--ink-2); font-size: 12px; margin: 0; }
+.block { padding: 12px 16px; border-top: 1px solid var(--hair); }
+.row-between { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+
+button, select, input { font: inherit; color: inherit; }
+button, select, input:not([type="checkbox"]) {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px;
+}
+button { cursor: pointer; }
+button:hover { background: var(--accent-wash); }
+button[type="submit"] { background: var(--home); color: #fff; border-color: transparent; }
+button.link, button.back { border: 0; background: none; color: var(--home); padding: 4px 0; }
+:focus-visible { outline: 2px solid var(--home); outline-offset: 2px; }
+
+.daybar { display: grid; grid-template-columns: auto 1fr auto; gap: 6px; }
+.layers { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 10px; font-size: 13px; }
+.layers label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.sw { width: 18px; height: 10px; border-radius: 3px; }
+.sw-home { background: linear-gradient(90deg, #cde2fb, var(--home)); }
+.sw-site { background: linear-gradient(90deg, #fbd9c9, var(--site)); }
+.dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--border); }
+.dot-home { background: var(--home); }
+.dot-site { background: var(--site); }
+.dot-open { background: var(--open); }
+.line { width: 18px; height: 0; border-top: 2px solid var(--muted); }
+
+.jobs, .cands, .busy { list-style: none; margin: 8px 0 0; padding: 0; }
+.jobs li {
+  display: grid; grid-template-columns: 12px 1fr auto; gap: 8px; align-items: start;
+  padding: 8px; border-radius: 6px; cursor: pointer;
+}
+.jobs li:hover, .jobs li:focus-visible { background: var(--accent-wash); }
+.jobs li .dot { margin-top: 4px; }
+.jobs .who { color: var(--ink-2); font-size: 12px; }
+.jobs .empty { cursor: default; color: var(--ink-2); display: block; }
+.tag { font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 1px solid var(--border); color: var(--ink-2); white-space: nowrap; }
+.tag.open { border-color: var(--open); }
+
+.plan { margin-top: 12px; }
+.plan summary { cursor: pointer; color: var(--home); }
+.plan form { display: grid; gap: 8px; margin-top: 8px; }
+.plan label { display: grid; gap: 2px; font-size: 12px; color: var(--ink-2); }
+.check { display: flex !important; align-items: center; gap: 6px; font-size: 13px; color: var(--ink) !important; margin: 8px 0; }
+.grid2 { grid-template-columns: 1fr 1fr; }
+.grid2 input { width: 100%; }
+
+#jobHead h2 { margin-top: 4px; }
+.cands li {
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; cursor: pointer;
+  display: grid; grid-template-columns: 22px 1fr auto; gap: 4px 8px;
+}
+.cands li:hover, .cands li.sel { background: var(--accent-wash); border-color: var(--home); }
+.cands .rank { font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.cands .name { font-weight: 600; }
+.cands .how { grid-column: 2 / 4; color: var(--ink-2); font-size: 12px; }
+.cands .times { grid-column: 2 / 4; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cands .drive { text-align: right; font-variant-numeric: tabular-nums; }
+.flags { grid-column: 2 / 4; display: flex; flex-wrap: wrap; gap: 4px; }
+.st { font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 1px solid currentColor; }
+.st.good { color: var(--good-ink); }
+.st.serious { color: var(--ink); border-color: var(--serious); }
+.st.critical { color: var(--critical); }
+.busy li { font-size: 12px; color: var(--ink-2); padding: 2px 0; }
+
+.warn { margin-top: 8px; font-size: 12px; }
+.warn summary { cursor: pointer; color: var(--ink); }
+.warn summary::before { content: "\26A0\FE0E  "; color: var(--critical); }
+.warn ul { padding-left: 18px; color: var(--ink-2); }
+
+/* map marks */
+.pin { display: grid; place-items: center; font: 600 11px/1 system-ui, sans-serif; color: #fff; border-radius: 50%;
+  border: 2px solid var(--surface); box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
+.pin-office { background: var(--office); color: var(--surface); border-radius: 4px; }
+.pin-cand { background: var(--home); }
+.leaflet-tooltip { font: 12px/1.3 system-ui, sans-serif; }
+
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: 55vh auto; height: auto; }
+  #map { grid-row: 1; height: 55vh; }
+  .side { grid-row: 2; border-right: 0; overflow: visible; }
+}
